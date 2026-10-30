@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    /* Versão de JavaScript de saída e bibliotecas disponíveis (DOM = APIs do navegador) */
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+
+    /* Sistema de módulos moderno, usado pelo Vite (bundler) */
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Configuração de resolução de módulos no estilo "bundler" (recomendado para projetos Vite) */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+
+    /* O Vite cuida da emissão dos arquivos finais; o tsc aqui serve só para checagem de tipos */
+    "noEmit": true,
+
+    /* JSX no formato novo do React 17+ (não precisa importar "React" em todo arquivo .tsx) */
+    "jsx": "react-jsx",
+
+    /* Verificações rígidas de tipo (boa prática) */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+
+    /* Permite importar módulos CommonJS como se fossem ES Modules */
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+
+    /* Permite usar paths "@/..." como alias para "src/..." (configurado também no vite.config.ts) */
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["src"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}

@@ -1,0 +1,27 @@
+# Dependências instaladas pelo npm
+node_modules/
+
+# Build de produção gerado pelo Vite
+dist/
+dist-ssr/
+
+# Arquivos de variáveis de ambiente
+.env
+.env.local
+.env.*.local
+
+# Logs
+npm-debug.log*
+*.log
+
+# Arquivos de configuração de editores/IDEs
+.vscode/
+!.vscode/extensions.json
+.idea/
+
+# Arquivos de sistema operacional
+.DS_Store
+Thumbs.db
+
+# Cache local do Vite
+.vite/

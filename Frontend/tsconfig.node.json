@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    /* Este tsconfig separado existe porque vite.config.ts roda em ambiente
+       Node.js (não no navegador), e por isso precisa de configurações
+       diferentes do código da aplicação em si (que roda no browser). */
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "strict": true
+  },
+  "include": ["vite.config.ts"]
+}
