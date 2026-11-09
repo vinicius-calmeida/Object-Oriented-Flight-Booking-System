@@ -1,26 +1,26 @@
 # ✈️ Frontend — Sistema de Compra de Passagens de Avião
 
-Interface web em **React + TypeScript**, estilizada com **Material UI (MUI)**, que consome a API do [backend](../backend/README.md).
+Interface web em **React + TypeScript**, estilizada com **Material UI**, que consome a API do [backend](../Backend/README.md). Inclui o componente de busca inteligente em linguagem natural.
 
-> Para a visão geral do projeto (frontend + backend), veja o [README da raiz](../README.md).
+> Para a visão geral do projeto (frontend + backend + IA), veja o [README da raiz](../README.md).
 
 ---
 
 ## 📑 Índice
 
 1. [Como o frontend funciona](#-como-o-frontend-funciona)
-2. [POO no frontend: o que muda em relação ao backend](#-poo-no-frontend-o-que-muda-em-rela%C3%A7%C3%A3o-ao-backend)
-3. [Tecnologias](#-tecnologias)
-4. [Estrutura de pastas](#-estrutura-de-pastas)
-5. [Instalação e execução](#-instala%C3%A7%C3%A3o-e-execu%C3%A7%C3%A3o)
-6. [Mapa de telas](#-mapa-de-telas)
-7. [Limitações conhecidas](#-limita%C3%A7%C3%B5es-conhecidas)
+2. [Busca inteligente no frontend](#-busca-inteligente-no-frontend)
+3. [Compra de múltiplos assentos](#-compra-de-múltiplos-assentos)
+4. [POO no frontend: o que muda em relação ao backend](#-poo-no-frontend-o-que-muda-em-relação-ao-backend)
+5. [Tecnologias](#-tecnologias)
+6. [Estrutura de pastas](#-estrutura-de-pastas)
+7. [Instalação e execução](#-instalação-e-execução)
+8. [Mapa de telas](#-mapa-de-telas)
+9. [Limitações conhecidas](#-limitações-conhecidas)
 
 ---
 
 ## 🧠 Como o frontend funciona
-
-O frontend é organizado por responsabilidade, parecido com o backend:
 
 ```
 pages/         → as telas da aplicação (cada rota tem uma página)
@@ -32,54 +32,104 @@ api/           → funções que chamam a API do backend
 Backend (http://localhost:3000)
 ```
 
-O **estado de quem está logado** fica disponível para qualquer tela através do `AuthContext` (Context API do React) — assim, não é preciso passar manualmente "quem é o usuário" de tela em tela.
+O **estado de quem está logado** fica disponível globalmente via `AuthContext` (Context API do React). Toda chamada ao backend passa pelo `apiClient.ts`, que injeta automaticamente o header `x-user-id` e padroniza o tratamento de erros.
 
-Toda chamada para o backend passa por um único ponto central (`apiClient.ts`), que já cuida de duas coisas automaticamente: enviar a identificação do usuário logado, e transformar erros da API em mensagens que as telas conseguem exibir.
+---
+
+## 🤖 Busca inteligente no frontend
+
+O componente `BuscaInteligente.tsx` aparece no topo da tela de voos (apenas para usuários logados) e permite descrever a viagem em texto livre.
+
+### Fluxo visual
+
+1. Usuário digita: `"voo para o Rio na sexta até R$ 500"`
+2. Clica em **Buscar com IA** — spinner aparece enquanto o Gemini processa
+3. Os filtros interpretados são exibidos como chips:
+   `Entendi:` `Para: Rio de Janeiro` `Data: 13/11/2026` `Até R$ 500`
+4. Os voos correspondentes substituem a listagem normal
+5. O usuário pode clicar em **Limpar** para voltar à listagem original
+
+### Degradação elegante
+
+Se a IA falhar (API fora do ar, resposta inválida, limite de requisições), o erro é exibido no próprio componente e a busca comum por origem/destino continua disponível abaixo, sem nenhum impacto.
+
+---
+
+## 🛋️ Compra de múltiplos assentos
+
+Na tela de detalhes do voo, o usuário pode selecionar **até 4 assentos** de uma vez:
+
+1. **Clique em um assento** para selecioná-lo (ícone com borda destacada)
+2. **Clique novamente** para desselecionar
+3. O contador `X / 4 assentos selecionados` mostra o progresso em tempo real
+4. Assentos além do limite ficam esmaecidos com tooltip explicativo
+5. Uma tabela aparece com uma linha por assento — cada linha tem um campo **CPF do passageiro** (formatado automaticamente como `000.000.000-00`)
+6. O botão `Reservar X passagem(ns)` só ativa quando todos os CPFs têm 11 dígitos
+7. O total estimado é calculado em tempo real
 
 ---
 
 ## 🎓 POO no frontend: o que muda em relação ao backend
 
-O backend usa classes e herança "de verdade" (uma classe `UsuarioVIP` que estende `Usuario`, por exemplo). O frontend não recebe essas classes — ele recebe apenas **dados** (JSON) vindos da API, sem os métodos que existiam no backend.
+O backend usa classes e herança (ex: `UsuarioVIP extends Usuario`). O frontend recebe apenas **dados JSON** da API, sem os métodos. Para não perder a regra de negócio:
 
-Para não perder a regra de negócio na tradução, o frontend recria, de forma simples, o que o polimorfismo do backend fazia: existe um arquivo (`utils/permissoes.ts`) com funções como `possuiBeneficiosVIP(usuario)` e `isAdmin(usuario)`, que olham o campo `tipo` do usuário e devolvem a resposta certa — a mesma regra do backend, só que escrita como função em vez de método de classe. É assim que telas como a navbar decidem mostrar ou esconder o menu de Administração, por exemplo.
+- `utils/permissoes.ts` tem funções como `possuiBeneficiosVIP(usuario)` e `isAdmin(usuario)` que replicam a lógica do backend consultando o campo `tipo`
+- Tipos TypeScript em `types/entidades.ts` espelham exatamente as entidades do backend, garantindo que o frontend saiba quais dados esperar
 
-Outros conceitos que aparecem no frontend:
+Outros princípios presentes:
 
 | Conceito | Onde aparece |
 |---|---|
-| **Reaproveitamento (DRY)** | Componentes como `CardVoo`, `PrecoComDesconto` e `MapaAssentos` são usados em várias telas diferentes, sem duplicar código |
-| **Tipagem (equivalente a contratos de classe)** | Cada entidade do backend (Usuário, Voo, Reserva...) tem um tipo TypeScript correspondente, garantindo que o frontend sempre saiba exatamente quais dados esperar |
-| **Encapsulamento de lógica** | A lógica de "qual desconto é o melhor para este usuário" fica isolada em um único arquivo (`utils/descontos.ts`), e não é repetida em cada tela que precisa exibir um preço |
+| **Reutilização (DRY)** | `CardVoo`, `PrecoComDesconto`, `MapaAssentos` usados em várias telas |
+| **Contratos de tipo** | Cada entidade do backend tem uma interface TypeScript correspondente |
+| **Encapsulamento de lógica** | Lógica de desconto isolada em `utils/descontos.ts` |
+| **Separação de responsabilidades** | `MapaAssentos` só notifica o pai via callback — não faz chamadas de API |
 
 ---
 
 ## 🛠 Tecnologias
 
-| Tecnologia | Para que serve aqui |
+| Tecnologia | Para que serve |
 |---|---|
 | **React** | Biblioteca para construir a interface em componentes |
-| **TypeScript** | Tipagem estática, evitando erros de "esqueci esse campo" |
-| **Vite** | Ferramenta que builda e serve o projeto durante o desenvolvimento |
-| **React Router** | Controla a navegação entre as telas (rotas) |
-| **Material UI (MUI)** | Biblioteca de componentes visuais prontos (botões, cards, tabelas, formulários) |
+| **TypeScript** | Tipagem estática |
+| **Vite** | Build tool e servidor de desenvolvimento |
+| **React Router** | Navegação entre telas |
+| **Material UI (MUI)** | Componentes visuais prontos (botões, cards, tabelas, formulários) |
 
 ---
 
 ## 🌳 Estrutura de pastas
 
 ```
-frontend/
-└── src/
-    ├── main.tsx         → ponto de entrada, monta os provedores globais
-    ├── App.tsx          → define todas as rotas da aplicação
-    ├── pages/           → as telas (Login, Voos, MinhasReservas...)
-    ├── components/       → peças visuais reutilizáveis
-    ├── api/              → funções que chamam o backend
-    ├── contexts/         → estado global (autenticação)
-    ├── hooks/            → funções reutilizáveis ligadas ao React (ex: useAuth)
-    ├── utils/            → funções auxiliares (formatação, permissões, descontos)
-    └── types/            → os "formatos" dos dados (espelham as entidades do backend)
+Frontend/src/
+├── main.tsx              → ponto de entrada
+├── App.tsx               → define as rotas
+├── pages/
+│   ├── Voos.tsx          → busca comum + busca inteligente integradas
+│   ├── DetalhesVoo.tsx   → seleção de múltiplos assentos + CPFs
+│   ├── MinhasReservas.tsx
+│   ├── Login.tsx / Cadastro.tsx
+│   └── admin/            → telas administrativas
+├── components/
+│   ├── voos/
+│   │   ├── BuscaInteligente.tsx   → componente de busca com IA
+│   │   ├── MapaAssentos.tsx       → grade visual, seleção múltipla
+│   │   ├── CardVoo.tsx
+│   │   └── FiltroBusca.tsx
+│   ├── reservas/
+│   └── ...
+├── api/
+│   ├── apiClient.ts       → wrapper HTTP central (injeta x-user-id)
+│   ├── vooApi.ts          → inclui buscarInteligente()
+│   ├── reservaApi.ts      → inclui criarMultiplas()
+│   └── ...
+├── contexts/              → AuthContext (estado de login global)
+├── hooks/                 → useAuth e outros
+├── utils/                 → permissoes, descontos, formatadores
+└── types/
+    ├── entidades.ts       → interfaces (Voo, Reserva, FiltrosBusca, ...)
+    └── enums.ts           → espelhos dos enums do backend
 ```
 
 ---
@@ -87,46 +137,47 @@ frontend/
 ## 💻 Instalação e execução
 
 ### Pré-requisitos
+
 - [Node.js](https://nodejs.org/) 18 ou superior
-- O **backend precisa estar rodando** (veja o [README do backend](../backend/README.md)) — o frontend não funciona sem ele
+- O **backend precisa estar rodando** ([README do backend](../Backend/README.md))
 
 ### Passo a passo
 
 ```bash
-cd frontend
-npm install     # instala as dependências
-npm run dev     # inicia o servidor de desenvolvimento
+cd Frontend
+npm install
+npm run dev
 ```
 
-Acesse **http://localhost:5173** no navegador.
+Acesse **http://localhost:5173**.
 
-> 💡 As chamadas que o frontend faz para `/api/...` são automaticamente redirecionadas para o backend (configurado em `vite.config.ts`) — por isso não é preciso alterar nenhum endereço, desde que o backend esteja rodando na porta padrão (3000).
+> As chamadas para `/api/...` são redirecionadas automaticamente para o backend (configurado em `vite.config.ts`) — não é preciso alterar nenhum endereço.
 
-### Outros comandos úteis
+### Outros comandos
 
 | Comando | O que faz |
 |---|---|
-| `npm run build` | Gera a versão final, otimizada, para produção |
-| `npm run preview` | Permite testar localmente a versão de produção |
+| `npm run build` | Gera a versão otimizada para produção |
+| `npm run preview` | Testa localmente a versão de produção |
 
 ---
 
 ## 🗺 Mapa de telas
 
-| Tela | Quem pode acessar |
-|---|---|
-| Busca de voos | Qualquer pessoa |
-| Detalhes do voo / seleção de assento | Qualquer pessoa (reservar exige login) |
-| Login / Cadastro | Qualquer pessoa |
-| Minhas Reservas | Usuário logado |
-| Tornar-se VIP | Usuário logado |
-| Notificações | Usuário logado |
-| Gerenciar Voos / Descontos / Usuários / Relatórios | Apenas Administrador |
+| Tela | Quem pode acessar | Novidades |
+|---|---|---|
+| Busca de voos | Qualquer pessoa | **Busca inteligente** (logados) |
+| Detalhes do voo | Qualquer pessoa (reservar exige login) | **Múltiplos assentos + CPF** |
+| Login / Cadastro | Qualquer pessoa | — |
+| Minhas Reservas | Usuário logado | — |
+| Tornar-se VIP | Usuário logado | — |
+| Notificações | Usuário logado | — |
+| Gerenciar Voos / Descontos / Usuários / Relatórios | Apenas Administrador | — |
 
 ---
 
 ## ⚠️ Limitações conhecidas
 
-- Não há atualização em tempo real (como WebSockets): o contador de notificações é atualizado periodicamente, a cada poucos segundos.
-- Os relatórios administrativos são calculados no próprio navegador, a partir dos dados já existentes — não existe um endpoint de relatório dedicado no backend.
-- A tela de cadastro permite criar uma conta diretamente como Administrador, apenas para facilitar testes — em um sistema real, isso nunca ficaria disponível ao público.
+- Sem atualização em tempo real (WebSockets) — o contador de notificações é atualizado periodicamente.
+- Relatórios administrativos calculados no navegador, não em endpoint dedicado.
+- A tela de cadastro permite criar conta como Administrador diretamente — apenas para facilitar testes.

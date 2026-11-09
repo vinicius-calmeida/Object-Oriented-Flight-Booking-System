@@ -1,88 +1,156 @@
 # ✈️ Backend — Sistema de Compra de Passagens de Avião
 
-API REST em **TypeScript + Node.js + Express**, com banco de dados **SQLite** gerenciado pelo **TypeORM**. É aqui que vive toda a regra de negócio do sistema.
+API REST em **TypeScript + Node.js + Express**, com banco de dados **SQLite** gerenciado pelo **TypeORM**. Centraliza toda a regra de negócio do sistema, incluindo o recurso de busca inteligente com LLM (Gemini).
 
-> Para a visão geral do projeto (frontend + backend), veja o [README da raiz](../README.md).
+> Para a visão geral do projeto (frontend + backend + IA), veja o [README da raiz](../README.md).
 
 ---
 
 ## 📑 Índice
 
 1. [Como o backend funciona](#-como-o-backend-funciona)
-2. [Conceitos de POO usados aqui](#-conceitos-de-poo-usados-aqui)
-3. [Tecnologias](#-tecnologias)
-4. [Estrutura de pastas](#-estrutura-de-pastas)
-5. [Instalação e execução](#-instala%C3%A7%C3%A3o-e-execu%C3%A7%C3%A3o)
-6. [Principais endpoints da API](#-principais-endpoints-da-api)
-7. [Regras de negócio importantes](#-regras-de-neg%C3%B3cio-importantes)
-8. [Limitações conhecidas](#-limita%C3%A7%C3%B5es-conhecidas)
+2. [Busca inteligente com IA](#-busca-inteligente-com-ia)
+3. [Conceitos de POO usados aqui](#-conceitos-de-poo-usados-aqui)
+4. [Tecnologias](#-tecnologias)
+5. [Estrutura de pastas](#-estrutura-de-pastas)
+6. [Instalação e execução](#-instalação-e-execução)
+7. [Principais endpoints da API](#-principais-endpoints-da-api)
+8. [Regras de negócio importantes](#-regras-de-negócio-importantes)
+9. [Limitações conhecidas](#-limitações-conhecidas)
 
 ---
 
 ## 🧠 Como o backend funciona
 
-O código é organizado em **camadas**, cada uma com uma única responsabilidade. Uma requisição passa por elas nesta ordem:
+O código é organizado em **camadas**, cada uma com uma única responsabilidade:
 
 ```
 Requisição HTTP
       ↓
 Controllers     → recebe a requisição, identifica quem está pedindo, devolve a resposta
       ↓
-Services        → aqui vive a REGRA DE NEGÓCIO (o que pode, o que não pode, cálculos)
+Services        → regra de negócio (o que pode, o que não pode, cálculos)
       ↓
-Repositories     → busca e salva dados no banco
+Repositories    → busca e salva dados no banco
       ↓
-Models           → representam as "coisas" do sistema (Usuário, Voo, Reserva...)
+Models          → representam as entidades do sistema (Usuário, Voo, Reserva...)
       ↓
 Banco de dados (SQLite)
 ```
 
-Por que separar assim? Porque cada camada só conhece a camada imediatamente abaixo dela. Um Controller nunca fala direto com o banco; um Service nunca monta uma resposta HTTP. Isso torna o código mais fácil de entender, testar e modificar — uma mudança na forma como os dados são salvos, por exemplo, não deveria afetar a regra de negócio.
+Cada camada só conhece a imediatamente abaixo dela. Um Controller nunca fala direto com o banco; um Service nunca monta resposta HTTP.
+
+---
+
+## 🤖 Busca inteligente com IA
+
+Permite que o usuário descreva a viagem em texto livre. O sistema usa o Gemini para extrair filtros estruturados e buscar os voos correspondentes.
+
+### Arquitetura
+
+```
+VooController (POST /voos/busca-inteligente)
+    │
+    ├── busca origens/destinos reais do banco (VooService.listarOrigensDestinos)
+    │
+    ▼
+BuscaInteligenteService
+    ├── valida o texto de entrada (3–300 caracteres)
+    ├── monta o prompt com cidades reais + data de hoje
+    ├── LlmClient (interface)  ──►  GeminiLlmClient (implementação real)
+    │                               LlmFake (usada nos testes unitários)
+    ├── recebe JSON do modelo
+    └── valida com FiltrosBuscaSchema (zod)
+    │
+    ▼
+VooService.buscarComFiltros(filtros)
+    ├── busca por origem/destino no banco (LIKE)
+    ├── filtra por data
+    ├── filtra por classe de assento (contarAssentosDisponiveis)
+    └── filtra por preço máximo
+```
+
+### Por que injetar as cidades reais no prompt?
+
+Sem isso, pesquisar "voo para os EUA" faria o LLM retornar `destino: "Estados Unidos"` — que não faria match com "Nova Iorque" no banco. Ao injetar a lista real de destinos cadastrados, o modelo escolhe a cidade correta diretamente.
+
+### Tratamento de erros
+
+| Situação | Erro | Código HTTP |
+|---|---|---|
+| Texto muito curto ou longo | `TextoInvalidoError` | 400 |
+| Modelo retornou JSON inválido | `RespostaInvalidaError` | 422 |
+| Falha na API do Gemini | Erro genérico | 503 |
+
+### Configuração
+
+Crie o arquivo `.env` na raiz da pasta `Backend/` (nunca sobe para o Git):
+
+```env
+GEMINI_API_KEY=sua_chave_aqui         # obtenha em aistudio.google.com/apikey
+LLM_MODEL=gemini-3.1-flash-lite       # verifique o nome atual em aistudio.google.com/docs/models
+```
+
+O arquivo `.env.example` (que vai para o Git) mostra as variáveis necessárias sem os valores.
 
 ---
 
 ## 🎓 Conceitos de POO usados aqui
 
-O projeto foi pensado para aplicar os pilares da Programação Orientada a Objetos de forma bem concreta:
-
-| Conceito | Onde aparece no código |
+| Conceito | Onde aparece |
 |---|---|
-| **Abstração** | A classe `Usuario` é abstrata — nunca existe um "usuário genérico" de fato, sempre é um Padrão, um VIP ou um Admin. |
-| **Herança** | `UsuarioPadrao`, `UsuarioVIP` e `Admin` herdam de `Usuario`, reaproveitando dados e comportamentos comuns (nome, e-mail, validação de senha). |
-| **Polimorfismo** | O método `getPermissoes()` existe em todas as subclasses de `Usuario`, mas cada uma devolve uma lista diferente. O sistema chama `usuario.getPermissoes()` sem precisar saber qual tipo específico é — cada objeto "sabe" responder por si. O mesmo vale para `isAdmin()` e `possuiBeneficiosVIP()`. |
-| **Encapsulamento** | A senha do usuário é um atributo protegido, só acessível através do método `validarSenha()`. O estado de um assento (ocupado ou livre) só muda através dos métodos `reservar()`/`liberar()`, nunca diretamente. |
-| **Enums** | Usados para representar conjuntos fixos de valores, como o status de um voo (`NOVA`, `A_VENDA`, `CANCELADA`...) ou o tipo de usuário (`PADRAO`, `VIP`, `ADMIN`), evitando textos soltos e erros de digitação. |
-
-Esses conceitos não são só "teoria aplicada por aplicar" — eles resolvem problemas reais do projeto. Por exemplo, o polimorfismo é o que permite que o sistema saiba automaticamente que um Admin pode comprar assento VIP, sem precisar de um monte de `if (tipo === "ADMIN" || tipo === "VIP")` espalhado pelo código.
+| **Abstração** | `Usuario` é abstrata — nunca existe um "usuário genérico", sempre Padrão, VIP ou Admin |
+| **Herança** | `UsuarioPadrao`, `UsuarioVIP` e `Admin` herdam de `Usuario` |
+| **Polimorfismo** | `getPermissoes()`, `isAdmin()` e `possuiBeneficiosVIP()` têm comportamento diferente por subclasse |
+| **Encapsulamento** | Senha só acessível via `validarSenha()`; estado do assento só muda via `reservar()`/`liberar()` |
+| **Injeção de dependência** | `BuscaInteligenteService` recebe `LlmClient` pelo construtor — permite trocar de provedor e usar `LlmFake` nos testes |
+| **Interface** | `LlmClient` desacopla o serviço da implementação concreta do Gemini |
+| **Enums** | `StatusVoo`, `ClasseAssento`, `TipoUsuario` etc. |
 
 ---
 
 ## 🛠 Tecnologias
 
-| Tecnologia | Para que serve aqui |
+| Tecnologia | Para que serve |
 |---|---|
-| **TypeScript** | Linguagem principal — tipagem estática ajuda a evitar erros bobos |
-| **Node.js** | Ambiente que executa o código no servidor |
-| **Express** | Framework que organiza as rotas da API REST |
-| **TypeORM** | Faz a ponte entre as classes do código e as tabelas do banco de dados |
-| **SQLite** | Banco de dados — um único arquivo local, sem precisar instalar servidor separado |
+| **TypeScript** | Linguagem principal — tipagem estática |
+| **Node.js** | Ambiente de execução |
+| **Express** | Framework de rotas HTTP |
+| **TypeORM** | ORM — ponte entre classes e tabelas do banco |
+| **SQLite** | Banco de dados em arquivo local |
+| **@google/genai** | SDK oficial do Google Gemini |
+| **Zod** | Validação de schema da resposta do LLM |
+| **express-rate-limit** | Limite de requisições na rota de IA |
+| **Vitest** | Framework de testes unitários |
 
 ---
 
 ## 🌳 Estrutura de pastas
 
 ```
-backend/
-└── src/
-    ├── app.ts              → ponto de entrada, monta o servidor
-    ├── enums/               → valores fixos (TipoUsuario, StatusVoo, etc.)
-    ├── models/              → as "entidades" do sistema (Usuario, Voo, Reserva...)
-    ├── repositories/         → acesso direto ao banco de dados
-    ├── services/            → regras de negócio
-    ├── controllers/          → rotas da API
-    ├── database/            → configuração da conexão com o banco
-    ├── utils/               → pequenas funções auxiliares
-    └── tests/               → script de demonstração de todos os fluxos
+Backend/src/
+├── app.ts                          → ponto de entrada, monta o servidor
+├── enums/                          → StatusVoo, ClasseAssento, TipoUsuario...
+├── models/                         → Usuario, Voo, Reserva, Assento...
+├── repositories/                   → acesso direto ao banco
+├── services/
+│   ├── busca-inteligente/
+│   │   ├── BuscaInteligenteService.ts
+│   │   ├── filtros.ts              → schema zod + tipo FiltrosBusca
+│   │   └── prompt.ts               → montarPromptSistema()
+│   ├── VooService.ts
+│   ├── ReservaService.ts
+│   └── ...
+├── llm/
+│   ├── LlmClient.ts                → interface
+│   └── GeminiLlmClient.ts          → implementação real
+├── controllers/                    → rotas HTTP
+├── database/                       → configuração TypeORM
+├── utils/                          → funções auxiliares
+└── tests/
+    ├── BuscaInteligenteService.test.ts   → 21 testes unitários (LlmFake)
+    ├── testeSistema.ts             → demonstração de todos os fluxos
+    └── seed.ts                     → popula banco com dados de exemplo
 ```
 
 ---
@@ -90,33 +158,42 @@ backend/
 ## 💻 Instalação e execução
 
 ### Pré-requisito
+
 [Node.js](https://nodejs.org/) 18 ou superior.
 
 ### Passo a passo
 
 ```bash
-cd backend
-npm install     # instala as dependências
-npm run dev     # inicia o servidor em modo desenvolvimento
+cd Backend
+npm install
+
+# Configure as variáveis de ambiente:
+cp .env.example .env
+# Edite .env: preencha GEMINI_API_KEY e LLM_MODEL
+
+npm run dev     # inicia em modo desenvolvimento (reinicia automaticamente)
 ```
 
-Quando tudo der certo, aparece:
+Quando tudo der certo:
 ```
 ✅ Conexão com o banco de dados (SQLite) estabelecida com sucesso.
 🚀 Servidor rodando em http://localhost:3000
 ```
 
-O arquivo do banco (`database.sqlite`) é criado automaticamente na primeira execução, dentro da própria pasta `backend/`.
+O arquivo `database.sqlite` é criado automaticamente na primeira execução.
 
-### Outros comandos úteis
+### Todos os comandos
 
 | Comando | O que faz |
 |---|---|
-| `npm run build` | Compila o TypeScript para JavaScript puro |
-| `npm start` | Executa a versão já compilada (uso em produção) |
-| `npm run test:sistema` | Roda um script que simula todo o fluxo do sistema (cadastro, compra, upgrade, cancelamento...) e imprime o resultado no terminal |
+| `npm run dev` | Inicia em modo desenvolvimento |
+| `npm run build` | Compila TypeScript para JavaScript |
+| `npm start` | Executa a versão compilada |
+| `npm test` | Roda os 21 testes unitários (sem usar a API real) |
+| `npm run test:sistema` | Demonstra todos os fluxos no terminal via Services |
+| `npx ts-node src/tests/seed.ts` | Popula o banco com 12 voos e 3 usuários de exemplo |
 
-> 💡 Quer testar com o banco "zerado"? Pare o servidor e apague o arquivo `database.sqlite` antes de rodar de novo.
+> Para testar com o banco zerado: pare o servidor, apague `database.sqlite` e rode `npm run dev` novamente.
 
 ---
 
@@ -126,26 +203,65 @@ O arquivo do banco (`database.sqlite`) é criado automaticamente na primeira exe
 |---|---|
 | Autenticação | `POST /auth/cadastro`, `POST /auth/login` |
 | Usuários | `GET /usuarios`, `GET /usuarios/:id`, `POST /usuarios/upgrade-vip`, `GET /usuarios/:id/notificacoes` |
-| Voos | `GET /voos`, `POST /voos` (admin), `PATCH /voos/:id/atrasar` (admin), `PATCH /voos/:id/cancelar` (admin) |
-| Reservas | `POST /reservas`, `GET /reservas/minhas`, `POST /reservas/:id/confirmar-pagamento`, `PATCH /reservas/:id/cancelar` |
+| Voos | `GET /voos`, `GET /voos/:id`, `POST /voos` (admin), `PUT /voos/:id` (admin), `PATCH /voos/:id/atrasar` (admin), `PATCH /voos/:id/cancelar` (admin), `DELETE /voos/:id` (admin) |
+| **Busca inteligente** | **`POST /voos/busca-inteligente`** — body: `{ texto: string }`, header: `x-user-id` |
+| Reservas | `POST /reservas`, `POST /reservas/multiplas`, `GET /reservas/minhas`, `POST /reservas/:id/confirmar-pagamento`, `PATCH /reservas/:id/cancelar` |
 | Descontos | `GET /descontos/ativos`, `POST /descontos` (admin) |
 
-A autenticação é simplificada: depois do login, o cliente envia o `id` do usuário no header `x-user-id` em toda requisição que precisa saber quem está pedindo.
+### Busca inteligente — exemplo de uso
+
+```bash
+curl -X POST http://localhost:3000/voos/busca-inteligente \
+  -H "Content-Type: application/json" \
+  -H "x-user-id: <id-do-usuario>" \
+  -d '{"texto":"quero um voo barato para o Rio na sexta"}'
+```
+
+Resposta:
+```json
+{
+  "filtros": {
+    "origem": null,
+    "destino": "Rio de Janeiro",
+    "data": "2026-11-13",
+    "classeAssento": null,
+    "precoMaximo": null
+  },
+  "voos": [ ... ]
+}
+```
+
+### Reserva múltipla — exemplo de uso
+
+```bash
+curl -X POST http://localhost:3000/reservas/multiplas \
+  -H "Content-Type: application/json" \
+  -H "x-user-id: <id-do-usuario>" \
+  -d '{
+    "vooId": "<id-do-voo>",
+    "passageiros": [
+      { "assentoId": "<id-1>", "cpf": "12345678901" },
+      { "assentoId": "<id-2>", "cpf": "98765432100" }
+    ]
+  }'
+```
 
 ---
 
 ## 📐 Regras de negócio importantes
 
-- Um voo passa por status automáticos conforme a data e a quantidade de assentos: `NOVA` → `A_VENDA` → `ULTIMAS_PASSAGENS` → `ESGOTADA`, e se a data já passou, vira `REALIZADO`. Os status `ATRASADA` e `CANCELADA` só podem ser definidos manualmente pelo administrador.
-- Não é possível cadastrar (ou alterar) um voo com data no passado.
-- Cancelar um voo reembolsa automaticamente todas as reservas confirmadas e notifica todos os passageiros.
-- Usuário Padrão só pode reservar assento Econômico; VIP e Admin podem reservar Econômico ou VIP.
-- Descontos podem ser **Gerais** (qualquer usuário) ou **VIP** (só quem tem benefícios VIP). Quando mais de um desconto se aplica, vale apenas o de maior percentual — eles nunca se somam.
+- Voos passam por status automáticos: `NOVA` → `A_VENDA` → `ULTIMAS_PASSAGENS` → `ESGOTADA` → `REALIZADO`. `ATRASADA` e `CANCELADA` são definidos manualmente pelo admin.
+- Cancelar um voo reembolsa automaticamente todas as reservas e notifica os passageiros.
+- Usuário Padrão só reserva assento Econômico; VIP e Admin podem reservar qualquer classe.
+- Máximo de **4 assentos por compra**, cada um com CPF do passageiro.
+- Descontos Gerais valem para qualquer usuário; descontos VIP só para quem tem benefícios VIP. O melhor desconto disponível é aplicado automaticamente — eles nunca se somam.
+- A rota de busca inteligente é limitada a **10 requisições por minuto por IP**.
 
 ---
 
 ## ⚠️ Limitações conhecidas
 
-- Senhas são armazenadas em texto puro (sem hash) — adequado só para fins didáticos.
-- A autenticação via header `x-user-id` não é segura para um ambiente real de produção.
-- Não há integração financeira real — o pagamento é só uma confirmação simbólica dentro do próprio sistema.
+- Senhas em texto puro (sem hash) — adequado apenas para fins didáticos.
+- Autenticação via header `x-user-id` sem criptografia — não seguro para produção.
+- Pagamento simbólico sem integração financeira real.
+- O LLM pode errar na interpretação — validação com zod captura os erros; a busca comum funciona como fallback.
