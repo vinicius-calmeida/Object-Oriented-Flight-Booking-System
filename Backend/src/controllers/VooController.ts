@@ -88,9 +88,9 @@ router.post(
       // LLM escolhe dentre "Nova Iorque" em vez de retornar "EUA".
       const { origens, destinos } = await vooService.listarOrigensDestinos();
       const filtros = await buscaInteligenteService.interpretar(texto, new Date(), origens, destinos);
-      const voos = await vooService.buscarComFiltros(filtros);
+      const { voos, contexto } = await vooService.buscarComFiltros(filtros);
 
-      res.status(200).json({ filtros, voos });
+      res.status(200).json({ filtros, voos, contexto });
     } catch (erro) {
       if (erro instanceof TextoInvalidoError) {
         res.status(400).json({ erro: erro.message });

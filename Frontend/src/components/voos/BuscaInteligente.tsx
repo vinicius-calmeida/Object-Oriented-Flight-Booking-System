@@ -1,27 +1,17 @@
 /**
  * BuscaInteligente.tsx
  * --------------------
- * Componente de busca de voos em linguagem natural. O usuário escreve
- * uma frase livre (ex: "voo barato para o Rio na sexta") e o sistema
- * usa o Gemini para extrair filtros estruturados e buscar os voos.
+ * Componente de busca de voos em linguagem natural com feedback
+ * contextual — informa ao usuário quando os resultados são
+ * aproximados (range de data) ou quando a data foi ignorada.
  *
- * Fluxo:
- * 1. Usuário digita o texto e clica em "Buscar com IA".
- * 2. O componente chama vooApi.buscarInteligente(texto).
- * 3. O backend interpreta o texto com o Gemini e retorna { filtros, voos }.
- * 4. Os filtros interpretados são exibidos para o usuário conferir
- *    ("Entendi: de X para Y, em Z..."). Isso é transparência: o usuário
- *    pode corrigir se o modelo errou.
- * 5. Os voos são repassados para o componente pai via onResultado para
- *    que ele os exiba com o CardVoo já existente.
- *
- * Degradação elegante: se a IA falhar, o erro é exibido aqui e a
- * busca comum (FiltroBusca) continua disponível normalmente.
- *
- * Props:
- * - onResultado: chamado ao receber os voos, para o pai (Voos.tsx)
- *   atualizar sua lista. Recebe null para sinalizar "limpar resultado".
- * - desativado: bloqueia o campo quando o pai já está carregando algo.
+ * Contextos possíveis vindos do backend:
+ * - "exato"           → encontrou voos que satisfazem todos os filtros
+ * - "data_aproximada" → nenhum voo na data exata, mostra os mais
+ *                       próximos dentro de ±5 dias
+ * - "sem_data"        → nenhum voo no range de ±5 dias, mostra os
+ *                       próximos disponíveis ignorando a data
+ * - "sem_resultados"  → nenhum voo encontrado
  */
 
 import { useState, type FormEvent } from "react";
@@ -38,15 +28,54 @@ import {
 } from "@mui/material";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import ClearIcon from "@mui/icons-material/Clear";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import { vooApi } from "@/api";
-import type { Voo, FiltrosBusca } from "@/types";
+import type { Voo, FiltrosBusca, ContextoBusca } from "@/types";
 import { ClasseAssento } from "@/types";
 
 interface BuscaInteligenteProps {
-  /** Chamado quando a busca retorna voos (ou null para limpar). */
   onResultado: (voos: Voo[] | null) => void;
-  /** Bloqueia o campo enquanto o pai está ocupado. */
   desativado?: boolean;
+}
+
+/** Mensagem e severidade para cada contexto de busca. */
+function mensagemContexto(
+  contexto: ContextoBusca,
+  filtros: FiltrosBusca
+): { texto: string; severidade: "success" | "info" | "warning" } | null {
+  const dataFormatada = filtros.data
+    ? new Date(filtros.data + "T12:00:00").toLocaleDateString("pt-BR", {
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+      })
+    : null;
+
+  switch (contexto) {
+    case "exato":
+      return null; // sem mensagem extra — resultado perfeito
+
+    case "data_aproximada":
+      return {
+        texto: `Não encontramos voos para ${dataFormatada ? `o dia ${dataFormatada}` : "a data solicitada"}, mas estas são as opções mais próximas (dentro de 5 dias).`,
+        severidade: "info",
+      };
+
+    case "sem_data":
+      return {
+        texto: `Não temos voos próximos a ${dataFormatada ? dataFormatada : "essa data"}${filtros.destino ? ` para ${filtros.destino}` : ""}. Estas são as próximas opções disponíveis.`,
+        severidade: "warning",
+      };
+
+    case "sem_resultados":
+      return {
+        texto: `Não encontramos nenhum voo${filtros.destino ? ` para ${filtros.destino}` : ""} disponível no momento. Tente outros filtros ou use a busca comum abaixo.`,
+        severidade: "warning",
+      };
+
+    default:
+      return null;
+  }
 }
 
 export function BuscaInteligente({ onResultado, desativado = false }: BuscaInteligenteProps) {
@@ -54,7 +83,8 @@ export function BuscaInteligente({ onResultado, desativado = false }: BuscaIntel
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [filtrosInterpretados, setFiltrosInterpretados] = useState<FiltrosBusca | null>(null);
-  const [ativo, setAtivo] = useState(false); // true após a primeira busca bem-sucedida
+  const [contexto, setContexto] = useState<ContextoBusca | null>(null);
+  const [ativo, setAtivo] = useState(false);
 
   async function handleSubmit(evento: FormEvent) {
     evento.preventDefault();
@@ -63,15 +93,17 @@ export function BuscaInteligente({ onResultado, desativado = false }: BuscaIntel
     setCarregando(true);
     setErro(null);
     setFiltrosInterpretados(null);
+    setContexto(null);
 
     try {
-      const { filtros, voos } = await vooApi.buscarInteligente(texto.trim());
+      const { filtros, voos, contexto: ctx } = await vooApi.buscarInteligente(texto.trim());
       setFiltrosInterpretados(filtros);
+      setContexto(ctx);
       setAtivo(true);
-      onResultado(voos);
+      onResultado(voos.length > 0 ? voos : null);
     } catch (erroCapturado) {
       setErro((erroCapturado as Error).message);
-      onResultado(null); // sinaliza para o pai não alterar a listagem atual
+      onResultado(null);
     } finally {
       setCarregando(false);
     }
@@ -81,9 +113,15 @@ export function BuscaInteligente({ onResultado, desativado = false }: BuscaIntel
     setTexto("");
     setErro(null);
     setFiltrosInterpretados(null);
+    setContexto(null);
     setAtivo(false);
     onResultado(null);
   }
+
+  const msgContexto =
+    contexto && filtrosInterpretados
+      ? mensagemContexto(contexto, filtrosInterpretados)
+      : null;
 
   return (
     <Paper
@@ -133,7 +171,11 @@ export function BuscaInteligente({ onResultado, desativado = false }: BuscaIntel
           <Button
             type="submit"
             variant="contained"
-            startIcon={carregando ? <CircularProgress size={16} color="inherit" /> : <AutoAwesomeIcon />}
+            startIcon={
+              carregando
+                ? <CircularProgress size={16} color="inherit" />
+                : <AutoAwesomeIcon />
+            }
             disabled={carregando || desativado || texto.trim().length < 3}
             sx={{ height: 56, whiteSpace: "nowrap" }}
           >
@@ -155,76 +197,79 @@ export function BuscaInteligente({ onResultado, desativado = false }: BuscaIntel
         </Box>
       </Box>
 
-      {/* Erro */}
+      {/* Erro da API */}
       {erro && (
         <Alert severity="error" sx={{ mt: 2 }}>
           {erro}
         </Alert>
       )}
 
-      {/* Filtros interpretados — transparência para o usuário */}
+      {/* Filtros interpretados + mensagem contextual */}
       <Collapse in={filtrosInterpretados !== null && !erro}>
         {filtrosInterpretados && (
-          <Box
-            mt={2}
-            p={1.5}
-            bgcolor="action.hover"
-            borderRadius={1}
-            display="flex"
-            flexWrap="wrap"
-            gap={1}
-            alignItems="center"
-          >
-            <Typography variant="caption" color="text.secondary" fontWeight={600} mr={0.5}>
-              Entendi:
-            </Typography>
+          <Box mt={2} display="flex" flexDirection="column" gap={1.5}>
 
-            {filtrosInterpretados.origem && (
-              <Chip
-                label={`De: ${filtrosInterpretados.origem}`}
-                size="small"
-                variant="outlined"
-              />
-            )}
-            {filtrosInterpretados.destino && (
-              <Chip
-                label={`Para: ${filtrosInterpretados.destino}`}
-                size="small"
-                variant="outlined"
-              />
-            )}
-            {filtrosInterpretados.data && (
-              <Chip
-                label={`Data: ${new Date(filtrosInterpretados.data + "T12:00:00").toLocaleDateString("pt-BR")}`}
-                size="small"
-                variant="outlined"
-              />
-            )}
-            {filtrosInterpretados.classeAssento && (
-              <Chip
-                label={`Classe: ${filtrosInterpretados.classeAssento === ClasseAssento.VIP ? "VIP" : "Econômica"}`}
-                size="small"
-                variant="outlined"
-              />
-            )}
-            {filtrosInterpretados.precoMaximo && (
-              <Chip
-                label={`Até R$ ${filtrosInterpretados.precoMaximo.toLocaleString("pt-BR")}`}
-                size="small"
-                variant="outlined"
-              />
-            )}
+            {/* Chips com os filtros interpretados */}
+            <Box
+              p={1.5}
+              bgcolor="action.hover"
+              borderRadius={1}
+              display="flex"
+              flexWrap="wrap"
+              gap={1}
+              alignItems="center"
+            >
+              <Typography variant="caption" color="text.secondary" fontWeight={600} mr={0.5}>
+                Entendi:
+              </Typography>
 
-            {/* Caso o modelo não tenha extraído nenhum filtro */}
-            {!filtrosInterpretados.origem &&
-              !filtrosInterpretados.destino &&
-              !filtrosInterpretados.data &&
-              !filtrosInterpretados.classeAssento &&
-              !filtrosInterpretados.precoMaximo && (
-                <Typography variant="caption" color="text.secondary">
-                  Nenhum filtro específico identificado — mostrando todos os voos disponíveis.
-                </Typography>
+              {filtrosInterpretados.origem && (
+                <Chip label={`De: ${filtrosInterpretados.origem}`} size="small" variant="outlined" />
               )}
+              {filtrosInterpretados.destino && (
+                <Chip label={`Para: ${filtrosInterpretados.destino}`} size="small" variant="outlined" />
+              )}
+              {filtrosInterpretados.data && (
+                <Chip
+                  label={`Data: ${new Date(filtrosInterpretados.data + "T12:00:00").toLocaleDateString("pt-BR")}`}
+                  size="small"
+                  variant="outlined"
+                  icon={contexto !== "exato" && contexto !== null ? <InfoOutlinedIcon /> : undefined}
+                  color={contexto === "data_aproximada" ? "warning" : "default"}
+                />
+              )}
+              {filtrosInterpretados.classeAssento && (
+                <Chip
+                  label={`Classe: ${filtrosInterpretados.classeAssento === ClasseAssento.VIP ? "VIP" : "Econômica"}`}
+                  size="small"
+                  variant="outlined"
+                />
+              )}
+              {filtrosInterpretados.precoMaximo && (
+                <Chip
+                  label={`Até R$ ${filtrosInterpretados.precoMaximo.toLocaleString("pt-BR")}`}
+                  size="small"
+                  variant="outlined"
+                />
+              )}
+
+              {!filtrosInterpretados.origem &&
+                !filtrosInterpretados.destino &&
+                !filtrosInterpretados.data &&
+                !filtrosInterpretados.classeAssento &&
+                !filtrosInterpretados.precoMaximo && (
+                  <Typography variant="caption" color="text.secondary">
+                    Nenhum filtro específico — mostrando todos os voos disponíveis.
+                  </Typography>
+                )}
+            </Box>
+
+            {/* Mensagem contextual (só aparece quando não é resultado exato) */}
+            {msgContexto && (
+              <Alert severity={msgContexto.severidade} icon={<InfoOutlinedIcon />}>
+                {msgContexto.texto}
+              </Alert>
+            )}
           </Box>
         )}
       </Collapse>

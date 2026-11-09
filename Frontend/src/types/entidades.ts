@@ -107,13 +107,22 @@ export interface FiltrosBusca {
 }
 
 /**
+ * Contexto do resultado da busca inteligente — espelha ContextoBusca do backend.
+ * Usado pelo componente para exibir a mensagem certa ao usuário.
+ */
+export type ContextoBusca =
+  | "exato"           // filtros totalmente satisfeitos
+  | "data_aproximada" // voos encontrados num range de ±5 dias
+  | "sem_data"        // nenhum voo no range, retorna os mais próximos ignorando data
+  | "sem_resultados"; // nenhum voo encontrado mesmo sem data
+
+/**
  * Resposta do endpoint POST /voos/busca-inteligente.
- * Traz tanto os filtros interpretados (para o usuário conferir) quanto
- * os voos encontrados.
  */
 export interface RespostaBuscaInteligente {
   filtros: FiltrosBusca;
   voos: Voo[];
+  contexto: ContextoBusca;
 }
 
 /**

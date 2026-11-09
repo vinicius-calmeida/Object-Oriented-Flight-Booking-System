@@ -38,6 +38,24 @@ import { ClasseAssento } from "../enums/ClasseAssento";
 import { GeradorId } from "../utils/GeradorId";
 import { FiltrosBusca } from "./busca-inteligente/filtros";
 
+/** Dias de janela para cada lado ao buscar por data aproximada. */
+const JANELA_DIAS_DATA = 5;
+
+/**
+ * Contexto do resultado da busca inteligente.
+ * O frontend usa isso para exibir a mensagem certa ao usuário.
+ */
+export type ContextoBusca =
+  | "exato"           // encontrou voos que batem com todos os filtros
+  | "data_aproximada" // encontrou voos no range ±JANELA_DIAS_DATA (data era o único miss)
+  | "sem_data"        // encontrou voos ignorando o filtro de data (nenhum no range)
+  | "sem_resultados"; // não encontrou nada mesmo ignorando a data
+
+export interface ResultadoBuscaInteligente {
+  voos: Voo[];
+  contexto: ContextoBusca;
+}
+
 /** Quantidade de assentos VIP gerados automaticamente ao cadastrar um voo (o restante é ECONOMICO). */
 const ASSENTOS_VIP_PADRAO = 8;
 
@@ -371,22 +389,28 @@ export class VooService {
   }
 
   /**
-   * Busca voos a partir dos filtros extraídos pelo LLM (busca inteligente).
+   * Busca voos a partir dos filtros extraídos pelo LLM, com lógica
+   * de fallback progressivo para evitar resultados vazios.
    *
-   * Origem e destino são delegados ao repositório (query LIKE no banco).
-   * ClasseAssento e precoMaximo são filtros aplicados em memória após a
-   * query, pois o banco armazena assentos individualmente e preço base
-   * sem os descontos — filtramos aqui para manter o repositório simples.
+   * Estratégia em 3 camadas:
    *
-   * Para classeAssento: o voo é incluído se ainda tiver ao menos um
-   * assento disponível da classe pedida. Isso preserva a semântica de
-   * "quero VIP" sem ocultar voos que tenham vagas VIP disponíveis.
+   * 1. BUSCA EXATA: aplica todos os filtros incluindo data exata.
+   *    Se encontrar voos → contexto "exato".
    *
-   * @param filtros  Filtros tipados vindos do BuscaInteligenteService.
+   * 2. BUSCA COM DATA APROXIMADA (±JANELA_DIAS_DATA dias): se não
+   *    encontrou nada com data exata, expande a janela. Ordena os
+   *    resultados por proximidade da data pedida.
+   *    Se encontrar voos → contexto "data_aproximada".
+   *
+   * 3. BUSCA SEM DATA: se não encontrou nem na janela, ignora o
+   *    filtro de data completamente. Mantém os outros filtros ativos
+   *    (destino, classe, preço) e ordena por data mais próxima.
+   *    Se encontrar → contexto "sem_data".
+   *    Se não encontrar nada → contexto "sem_resultados".
    */
-  public async buscarComFiltros(filtros: FiltrosBusca): Promise<Voo[]> {
-    // Busca inicial por origem/destino (ou todos, se ambos forem null)
-    const voos =
+  public async buscarComFiltros(filtros: FiltrosBusca): Promise<ResultadoBuscaInteligente> {
+    // Busca base por origem/destino (ou todos os voos se ambos null)
+    const voosBase =
       filtros.origem || filtros.destino
         ? await this.vooRepository.buscarPorOrigemDestino(
             filtros.origem ?? undefined,
@@ -394,36 +418,80 @@ export class VooService {
           )
         : await this.vooRepository.listarTodos();
 
-    // Atualiza status automático de cada voo e remove os já realizados
-    const voosAtualizados = await Promise.all(
-      voos.map((voo) => this.atualizarStatusAutomatico(voo))
-    );
-    let resultado = voosAtualizados.filter(
-      (voo) => voo.status !== StatusVoo.REALIZADO
-    );
+    // Atualiza status automático e remove realizados
+    const voosAtivos = (
+      await Promise.all(voosBase.map((v) => this.atualizarStatusAutomatico(v)))
+    ).filter((v) => v.status !== StatusVoo.REALIZADO);
 
-    // Filtro de data: mantém apenas voos cuja dataHora é no dia pedido
+    // Aplica filtros de classe e preço (esses nunca fazem fallback)
+    const voosComFiltrosFixos = this.aplicarFiltrosFixos(voosAtivos, filtros);
+
+    // --- Camada 1: busca exata com data ---
     if (filtros.data) {
-      resultado = resultado.filter((voo) => {
+      const exatos = voosComFiltrosFixos.filter((voo) => {
         const dataVoo = new Date(voo.dataHora).toISOString().slice(0, 10);
         return dataVoo === filtros.data;
       });
+
+      if (exatos.length > 0) {
+        return { voos: exatos, contexto: "exato" };
+      }
+
+      // --- Camada 2: janela de ±JANELA_DIAS_DATA dias ---
+      const dataReferencia = new Date(filtros.data + "T12:00:00Z");
+      const iniciJanela = new Date(dataReferencia);
+      iniciJanela.setDate(iniciJanela.getDate() - JANELA_DIAS_DATA);
+      const fimJanela = new Date(dataReferencia);
+      fimJanela.setDate(fimJanela.getDate() + JANELA_DIAS_DATA);
+
+      const naJanela = voosComFiltrosFixos.filter((voo) => {
+        const dataVoo = new Date(voo.dataHora);
+        return dataVoo >= iniciJanela && dataVoo <= fimJanela;
+      });
+
+      if (naJanela.length > 0) {
+        // Ordena por proximidade da data pedida
+        const ordenados = naJanela.sort((a, b) => {
+          const distA = Math.abs(new Date(a.dataHora).getTime() - dataReferencia.getTime());
+          const distB = Math.abs(new Date(b.dataHora).getTime() - dataReferencia.getTime());
+          return distA - distB;
+        });
+        return { voos: ordenados, contexto: "data_aproximada" };
+      }
+
+      // --- Camada 3: ignora data, ordena por proximidade ---
+      if (voosComFiltrosFixos.length > 0) {
+        const ordenados = voosComFiltrosFixos.sort((a, b) =>
+          new Date(a.dataHora).getTime() - new Date(b.dataHora).getTime()
+        );
+        return { voos: ordenados, contexto: "sem_data" };
+      }
+
+      return { voos: [], contexto: "sem_resultados" };
     }
 
-    // Filtro de classe de assento: mantém voos com ao menos 1 assento
-    // disponível da classe pedida
+    // Sem filtro de data: retorna tudo ordenado por data mais próxima
+    if (voosComFiltrosFixos.length === 0) {
+      return { voos: [], contexto: "sem_resultados" };
+    }
+
+    const ordenados = voosComFiltrosFixos.sort(
+      (a, b) => new Date(a.dataHora).getTime() - new Date(b.dataHora).getTime()
+    );
+    return { voos: ordenados, contexto: "exato" };
+  }
+
+  /** Aplica filtros de classe de assento e preço máximo. Separado para reutilizar nas 3 camadas. */
+  private aplicarFiltrosFixos(voos: Voo[], filtros: FiltrosBusca): Voo[] {
+    let resultado = voos;
+
     if (filtros.classeAssento) {
       const classe = filtros.classeAssento as ClasseAssento;
-      resultado = resultado.filter(
-        (voo) => voo.contarAssentosDisponiveis(classe) > 0
-      );
+      resultado = resultado.filter((v) => v.contarAssentosDisponiveis(classe) > 0);
     }
 
-    // Filtro de preço máximo: usa o precoBase do voo como referência
     if (filtros.precoMaximo !== null && filtros.precoMaximo !== undefined) {
-      resultado = resultado.filter(
-        (voo) => voo.precoBase <= filtros.precoMaximo!
-      );
+      resultado = resultado.filter((v) => v.precoBase <= filtros.precoMaximo!);
     }
 
     return resultado;
