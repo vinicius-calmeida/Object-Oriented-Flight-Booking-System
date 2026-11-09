@@ -68,6 +68,7 @@ export interface Reserva {
   usuario: Usuario;
   voo: Voo;
   assento: Assento;
+  cpfPassageiro: string | null;
   valorFinal: number;
   status: StatusReserva;
   dataCriacao: string;
@@ -90,6 +91,29 @@ export interface Desconto {
   tipoVooAplicavel: TipoVoo;
   publico: PublicoDesconto;
   ativo: boolean;
+}
+
+/**
+ * Filtros estruturados extraídos pelo LLM a partir do texto livre do
+ * usuário (espelha FiltrosBusca do backend).
+ * Campos null = usuário não informou aquele filtro.
+ */
+export interface FiltrosBusca {
+  origem: string | null;
+  destino: string | null;
+  data: string | null; // AAAA-MM-DD
+  classeAssento: ClasseAssento | null;
+  precoMaximo: number | null;
+}
+
+/**
+ * Resposta do endpoint POST /voos/busca-inteligente.
+ * Traz tanto os filtros interpretados (para o usuário conferir) quanto
+ * os voos encontrados.
+ */
+export interface RespostaBuscaInteligente {
+  filtros: FiltrosBusca;
+  voos: Voo[];
 }
 
 /**

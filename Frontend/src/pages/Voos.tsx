@@ -25,6 +25,7 @@ import {
   Grid,
   CircularProgress,
   Alert,
+  Divider,
 } from "@mui/material";
 import SearchOffIcon from "@mui/icons-material/SearchOff";
 import { vooApi, descontoApi } from "@/api";
@@ -33,6 +34,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { possuiBeneficiosVIP } from "@/utils/permissoes";
 import { FiltroBusca } from "@/components/voos/FiltroBusca";
 import { CardVoo } from "@/components/voos/CardVoo";
+import { BuscaInteligente } from "@/components/voos/BuscaInteligente";
 
 export function Voos() {
   const { usuario } = useAuth();
@@ -44,6 +46,10 @@ export function Voos() {
 
   const [origem, setOrigem] = useState("");
   const [destino, setDestino] = useState("");
+
+  // Quando a busca inteligente retorna resultado, guardamos aqui.
+  // null = sem busca ativa (exibe resultados da busca comum).
+  const [voosIA, setVoosIA] = useState<Voo[] | null>(null);
 
   /** Busca os voos no backend, opcionalmente filtrando por origem/destino. */
   const buscarVoos = useCallback(async (filtros?: { origem?: string; destino?: string }) => {
@@ -83,6 +89,7 @@ export function Voos() {
   }, [buscarVoos, buscarDescontosAtivos]);
 
   function handleBuscar() {
+    setVoosIA(null); // limpa resultado da IA ao usar busca comum
     buscarVoos({
       origem: origem.trim() || undefined,
       destino: destino.trim() || undefined,
@@ -92,8 +99,24 @@ export function Voos() {
   function handleLimpar() {
     setOrigem("");
     setDestino("");
+    setVoosIA(null);
     buscarVoos();
   }
+
+  /**
+   * Chamado pelo BuscaInteligente ao receber resultado.
+   * null = usuário limpou ou houve erro (não altera a listagem).
+   */
+  function handleResultadoIA(voosRetornados: Voo[] | null) {
+    if (voosRetornados !== null) {
+      setVoosIA(voosRetornados);
+    } else {
+      setVoosIA(null);
+    }
+  }
+
+  // Voos a exibir: resultado da IA (se ativa) ou da busca comum
+  const voosExibidos = voosIA ?? voos;
 
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 6 }}>
@@ -101,9 +124,20 @@ export function Voos() {
         Encontre seu próximo voo
       </Typography>
       <Typography variant="body1" color="text.secondary" mb={3}>
-        Busque por origem e destino, ou veja todos os voos disponíveis.
+        Busque por origem e destino, ou use a busca inteligente para descrever sua viagem.
       </Typography>
 
+      {/* Busca inteligente com IA — só aparece se o usuário estiver logado */}
+      {usuario && (
+        <BuscaInteligente
+          onResultado={handleResultadoIA}
+          desativado={carregando}
+        />
+      )}
+
+      <Divider sx={{ my: 2 }} />
+
+      {/* Busca comum por origem/destino */}
       <FiltroBusca
         origem={origem}
         destino={destino}
@@ -123,7 +157,7 @@ export function Voos() {
         <Box display="flex" justifyContent="center" py={8}>
           <CircularProgress />
         </Box>
-      ) : voos.length === 0 ? (
+      ) : voosExibidos.length === 0 ? (
         <Box display="flex" flexDirection="column" alignItems="center" py={8} color="text.secondary">
           <SearchOffIcon sx={{ fontSize: 56, mb: 2, opacity: 0.5 }} />
           <Typography variant="h6">Nenhum voo encontrado</Typography>
@@ -131,7 +165,7 @@ export function Voos() {
         </Box>
       ) : (
         <Grid container spacing={3}>
-          {voos.map((voo) => (
+          {voosExibidos.map((voo) => (
             <Grid item xs={12} sm={6} md={4} key={voo.id}>
               <CardVoo
                 voo={voo}

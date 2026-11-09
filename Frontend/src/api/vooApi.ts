@@ -6,7 +6,7 @@
  */
 
 import { apiClient } from "./apiClient";
-import type { Voo, TipoVoo } from "@/types";
+import type { Voo, TipoVoo, RespostaBuscaInteligente } from "@/types";
 
 export interface DadosCadastroVoo {
   origem: string;
@@ -72,4 +72,12 @@ export const vooApi = {
 
   /** Remove um voo do sistema. Apenas ADMIN. */
   remover: (id: string): Promise<void> => apiClient.delete<void>(`/voos/${id}`),
+
+  /**
+   * Envia um texto livre ao backend, que usa o Gemini para extrair
+   * filtros e devolver os voos correspondentes.
+   * Exige autenticação (x-user-id é enviado automaticamente pelo apiClient).
+   */
+  buscarInteligente: (texto: string): Promise<RespostaBuscaInteligente> =>
+    apiClient.post<RespostaBuscaInteligente>("/voos/busca-inteligente", { texto }),
 };
