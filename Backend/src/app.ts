@@ -19,6 +19,7 @@
  *   npm start
  */
 
+import "dotenv/config"; // Carrega variáveis de ambiente do .env ANTES de tudo
 import "reflect-metadata"; // Necessário antes de qualquer uso de decorator do TypeORM
 import express, { Request, Response } from "express";
 import cors from "cors";

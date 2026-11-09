@@ -17,16 +17,98 @@
  */
 
 import { Router, Request, Response } from "express";
+import rateLimit from "express-rate-limit";
 import { VooService } from "../services/VooService";
 import { NotificacaoService } from "../services/NotificacaoService";
 import { UsuarioRepository } from "../repositories/UsuarioRepository";
 import { exigirAutenticacao } from "./autenticacaoMiddleware";
 import { TipoVoo } from "../enums/TipoVoo";
+import { GeminiLlmClient } from "../llm/GeminiLlmClient";
+import { BuscaInteligenteService, TextoInvalidoError, RespostaInvalidaError } from "../services/busca-inteligente/BuscaInteligenteService";
 
 const router = Router();
 const vooService = new VooService();
 const notificacaoService = new NotificacaoService();
 const usuarioRepository = new UsuarioRepository();
+
+// Instancia o serviço de busca inteligente com o cliente Gemini real.
+// Em testes, basta construir BuscaInteligenteService com um LlmFake.
+const buscaInteligenteService = new BuscaInteligenteService(
+  new GeminiLlmClient()
+);
+
+/**
+ * Rate limiter para a rota de busca inteligente.
+ * Cada chamada consome créditos da API do Gemini; limitar evita
+ * gastos acidentais (ex: loop de requisições ou uso indevido).
+ * 10 requisições por minuto por IP é suficiente para uso normal.
+ */
+const limiteBuscaInteligente = rateLimit({
+  windowMs: 60 * 1000, // janela de 1 minuto
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { erro: "Muitas buscas em pouco tempo. Aguarde um momento e tente novamente." },
+});
+
+/**
+ * POST /voos/busca-inteligente
+ * Interpreta um texto livre do usuário (ex: "voo barato para o Rio na
+ * sexta") usando o Gemini, extrai filtros estruturados e devolve os
+ * voos correspondentes junto com os filtros interpretados.
+ *
+ * A rota exige autenticação (x-user-id) para evitar uso anônimo da
+ * API do Gemini e tem rate limit de 10 req/min por IP.
+ *
+ * Resposta de sucesso (200):
+ * {
+ *   filtros: { origem, destino, data, classeAssento, precoMaximo },
+ *   voos: [ ...Voo[] ]
+ * }
+ *
+ * Tratamento de erros:
+ * 400 -> texto ausente ou fora do tamanho permitido (TextoInvalidoError)
+ * 422 -> Gemini não devolveu JSON válido/compatível (RespostaInvalidaError)
+ * 503 -> falha inesperada na API do Gemini ou no banco
+ */
+router.post(
+  "/busca-inteligente",
+  exigirAutenticacao,
+  limiteBuscaInteligente,
+  async (req: Request, res: Response) => {
+    try {
+      const { texto } = req.body ?? {};
+
+      if (typeof texto !== "string") {
+        res.status(400).json({ erro: "Informe o campo 'texto' com a descrição da sua viagem." });
+        return;
+      }
+
+      // Busca as cidades reais do banco para injetar no prompt — assim o
+      // LLM escolhe dentre "Nova Iorque" em vez de retornar "EUA".
+      const { origens, destinos } = await vooService.listarOrigensDestinos();
+      const filtros = await buscaInteligenteService.interpretar(texto, new Date(), origens, destinos);
+      const voos = await vooService.buscarComFiltros(filtros);
+
+      res.status(200).json({ filtros, voos });
+    } catch (erro) {
+      if (erro instanceof TextoInvalidoError) {
+        res.status(400).json({ erro: erro.message });
+        return;
+      }
+      if (erro instanceof RespostaInvalidaError) {
+        res.status(422).json({
+          erro: "Não consegui interpretar o pedido. Tente reformular, por exemplo: 'voo para São Paulo amanhã'.",
+        });
+        return;
+      }
+      console.error("Falha na busca inteligente:", erro);
+      res.status(503).json({
+        erro: "Busca inteligente indisponível no momento. Use a busca comum.",
+      });
+    }
+  }
+);
 
 /**
  * GET /voos

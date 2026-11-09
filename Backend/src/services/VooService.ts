@@ -36,6 +36,7 @@ import { TipoVoo } from "../enums/TipoVoo";
 import { StatusVoo } from "../enums/StatusVoo";
 import { ClasseAssento } from "../enums/ClasseAssento";
 import { GeradorId } from "../utils/GeradorId";
+import { FiltrosBusca } from "./busca-inteligente/filtros";
 
 /** Quantidade de assentos VIP gerados automaticamente ao cadastrar um voo (o restante é ECONOMICO). */
 const ASSENTOS_VIP_PADRAO = 8;
@@ -355,5 +356,76 @@ export class VooService {
       throw new Error("Apenas administradores podem remover voos.");
     }
     await this.vooRepository.remover(vooId);
+  }
+
+  /**
+   * Retorna as listas dedupadas de origens e destinos cadastrados no
+   * banco, para injetar no prompt do LLM. Assim o modelo escolhe
+   * dentre cidades reais em vez de inventar termos geográficos.
+   */
+  public async listarOrigensDestinos(): Promise<{ origens: string[]; destinos: string[] }> {
+    const todos = await this.vooRepository.listarTodos();
+    const origens = [...new Set(todos.map((v) => v.origem))].sort();
+    const destinos = [...new Set(todos.map((v) => v.destino))].sort();
+    return { origens, destinos };
+  }
+
+  /**
+   * Busca voos a partir dos filtros extraídos pelo LLM (busca inteligente).
+   *
+   * Origem e destino são delegados ao repositório (query LIKE no banco).
+   * ClasseAssento e precoMaximo são filtros aplicados em memória após a
+   * query, pois o banco armazena assentos individualmente e preço base
+   * sem os descontos — filtramos aqui para manter o repositório simples.
+   *
+   * Para classeAssento: o voo é incluído se ainda tiver ao menos um
+   * assento disponível da classe pedida. Isso preserva a semântica de
+   * "quero VIP" sem ocultar voos que tenham vagas VIP disponíveis.
+   *
+   * @param filtros  Filtros tipados vindos do BuscaInteligenteService.
+   */
+  public async buscarComFiltros(filtros: FiltrosBusca): Promise<Voo[]> {
+    // Busca inicial por origem/destino (ou todos, se ambos forem null)
+    const voos =
+      filtros.origem || filtros.destino
+        ? await this.vooRepository.buscarPorOrigemDestino(
+            filtros.origem ?? undefined,
+            filtros.destino ?? undefined
+          )
+        : await this.vooRepository.listarTodos();
+
+    // Atualiza status automático de cada voo e remove os já realizados
+    const voosAtualizados = await Promise.all(
+      voos.map((voo) => this.atualizarStatusAutomatico(voo))
+    );
+    let resultado = voosAtualizados.filter(
+      (voo) => voo.status !== StatusVoo.REALIZADO
+    );
+
+    // Filtro de data: mantém apenas voos cuja dataHora é no dia pedido
+    if (filtros.data) {
+      resultado = resultado.filter((voo) => {
+        const dataVoo = new Date(voo.dataHora).toISOString().slice(0, 10);
+        return dataVoo === filtros.data;
+      });
+    }
+
+    // Filtro de classe de assento: mantém voos com ao menos 1 assento
+    // disponível da classe pedida
+    if (filtros.classeAssento) {
+      const classe = filtros.classeAssento as ClasseAssento;
+      resultado = resultado.filter(
+        (voo) => voo.contarAssentosDisponiveis(classe) > 0
+      );
+    }
+
+    // Filtro de preço máximo: usa o precoBase do voo como referência
+    if (filtros.precoMaximo !== null && filtros.precoMaximo !== undefined) {
+      resultado = resultado.filter(
+        (voo) => voo.precoBase <= filtros.precoMaximo!
+      );
+    }
+
+    return resultado;
   }
 }
