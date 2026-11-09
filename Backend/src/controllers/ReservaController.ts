@@ -53,6 +53,39 @@ router.post("/", exigirAutenticacao, async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /reservas/multiplas
+ * Cria múltiplas reservas (até 4) em uma única compra.
+ * Body esperado: { vooId, passageiros: [{ assentoId, cpf }] }
+ *
+ * Valida todos os assentos antes de criar qualquer reserva (atomicidade
+ * parcial). Retorna um array com todas as reservas criadas.
+ */
+router.post(
+  "/multiplas",
+  exigirAutenticacao,
+  async (req: Request, res: Response) => {
+    try {
+      const { vooId, passageiros } = req.body;
+
+      if (!vooId || !Array.isArray(passageiros)) {
+        res.status(400).json({ erro: "Informe 'vooId' e um array 'passageiros' com { assentoId, cpf }." });
+        return;
+      }
+
+      const reservas = await reservaService.criarReservas(
+        req.usuarioAutenticado!,
+        vooId,
+        passageiros
+      );
+
+      res.status(201).json(reservas);
+    } catch (erro) {
+      res.status(400).json({ erro: (erro as Error).message });
+    }
+  }
+);
+
+/**
  * GET /reservas/minhas
  * Lista todas as reservas do usuário autenticado.
  * Posicionada antes de "/:id" para não ser interpretada como um id de reserva.

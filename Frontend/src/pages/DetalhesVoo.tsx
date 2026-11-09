@@ -1,19 +1,14 @@
 /**
  * DetalhesVoo.tsx
  * ---------------
- * Tela de detalhes de um voo específico, onde o usuário seleciona um
- * assento e confirma a criação da reserva.
+ * Tela de detalhes de um voo, onde o usuário seleciona até 4 assentos
+ * e informa um CPF por passageiro, depois confirma a compra de uma vez.
  *
- * FLUXO (alinhado com a especificação do projeto):
- * 1. usuário seleciona voo (já feito ao navegar para esta tela, vindo de Voos.tsx)
- * 2. usuário seleciona assento (MapaAssentos.tsx)
- * 3. sistema cria a reserva (reservaApi.criar()), com status PENDENTE_PAGAMENTO
- * 4. ao criar a reserva com sucesso, redirecionamos para "Minhas Reservas",
- *    onde o usuário poderá ver o botão "Confirmar Pagamento" (Bloco F8)
- *
- * Caso o usuário NÃO esteja logado e tente reservar, redirecionamos
- * para a tela de Login (a visualização do voo em si é pública, mas a
- * reserva exige autenticação, conforme o ReservaController do backend).
+ * FLUXO:
+ * 1. Usuário seleciona assentos no MapaAssentos (até 4, clique para toggle).
+ * 2. Para cada assento selecionado, aparece um campo de CPF do passageiro.
+ * 3. Ao confirmar, o sistema cria todas as reservas com POST /reservas/multiplas.
+ * 4. Em caso de sucesso, redireciona para "Minhas Reservas".
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -28,6 +23,12 @@ import {
   Button,
   CircularProgress,
   Alert,
+  TextField,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
 } from "@mui/material";
 import FlightTakeoffIcon from "@mui/icons-material/FlightTakeoff";
 import FlightLandIcon from "@mui/icons-material/FlightLand";
@@ -44,8 +45,17 @@ import {
   textoClasseAssento,
 } from "@/utils/formatadores";
 import { calcularMelhorDesconto } from "@/utils/descontos";
-import { MapaAssentos } from "@/components/voos/MapaAssentos";
+import { MapaAssentos, MAX_ASSENTOS_POR_COMPRA } from "@/components/voos/MapaAssentos";
 import { PrecoComDesconto } from "@/components/descontos/PrecoComDesconto";
+
+/** Formata CPF digitado: 000.000.000-00 */
+function formatarCpf(valor: string): string {
+  const digits = valor.replace(/\D/g, "").slice(0, 11);
+  return digits
+    .replace(/(\d{3})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d{1,2})$/, "$1-$2");
+}
 
 export function DetalhesVoo() {
   const { id } = useParams<{ id: string }>();
@@ -57,7 +67,11 @@ export function DetalhesVoo() {
   const [carregando, setCarregando] = useState(true);
   const [erroCarregamento, setErroCarregamento] = useState<string | null>(null);
 
-  const [assentoSelecionado, setAssentoSelecionado] = useState<Assento | null>(null);
+  // Lista de assentos selecionados
+  const [assentosSelecionados, setAssentosSelecionados] = useState<Assento[]>([]);
+  // CPF por assento: chave = assentoId
+  const [cpfsPorAssento, setCpfsPorAssento] = useState<Record<string, string>>({});
+
   const [erroReserva, setErroReserva] = useState<string | null>(null);
   const [criandoReserva, setCriandoReserva] = useState(false);
 
@@ -75,13 +89,11 @@ export function DetalhesVoo() {
     }
   }, [id]);
 
-  /** Busca os descontos ativos (rota pública), usados para calcular e exibir o preço com desconto antes da compra. */
   const buscarDescontosAtivos = useCallback(async () => {
     try {
       const resultado = await descontoApi.listarAtivos();
       setDescontosAtivos(resultado);
     } catch {
-      // Falha silenciosa: ver mesma justificativa em Voos.tsx.
       setDescontosAtivos([]);
     }
   }, []);
@@ -91,14 +103,42 @@ export function DetalhesVoo() {
     buscarDescontosAtivos();
   }, [buscarVoo, buscarDescontosAtivos]);
 
+  function handleSelecionarAssentos(novos: Assento[]) {
+    // Remove CPFs de assentos que foram desselecionados
+    const idsNovos = new Set(novos.map((a) => a.id));
+    setCpfsPorAssento((prev) => {
+      const limpo: Record<string, string> = {};
+      for (const id of idsNovos) {
+        if (prev[id]) limpo[id] = prev[id];
+      }
+      return limpo;
+    });
+    setAssentosSelecionados(novos);
+    setErroReserva(null);
+  }
+
+  function handleCpfChange(assentoId: string, valor: string) {
+    setCpfsPorAssento((prev) => ({ ...prev, [assentoId]: formatarCpf(valor) }));
+  }
+
+  // Todos os CPFs preenchidos e com 11 dígitos
+  const cpfsValidos =
+    assentosSelecionados.length > 0 &&
+    assentosSelecionados.every((a) => {
+      const cpf = (cpfsPorAssento[a.id] ?? "").replace(/\D/g, "");
+      return cpf.length === 11;
+    });
+
   async function handleConfirmarReserva() {
-    if (!voo || !assentoSelecionado) return;
+    if (!voo || assentosSelecionados.length === 0) return;
 
     if (!usuario) {
-      // Reserva exige login - envia o usuário para o Login, e poderia
-      // futuramente trazê-lo de volta para esta mesma tela (ver nota
-      // sobre "origem" no Login.tsx, Bloco F5).
       navigate("/login");
+      return;
+    }
+
+    if (!cpfsValidos) {
+      setErroReserva("Preencha o CPF (11 dígitos) de todos os passageiros antes de confirmar.");
       return;
     }
 
@@ -106,7 +146,13 @@ export function DetalhesVoo() {
     setCriandoReserva(true);
 
     try {
-      await reservaApi.criar({ vooId: voo.id, assentoId: assentoSelecionado.id });
+      await reservaApi.criarMultiplas({
+        vooId: voo.id,
+        passageiros: assentosSelecionados.map((a) => ({
+          assentoId: a.id,
+          cpf: cpfsPorAssento[a.id] ?? "",
+        })),
+      });
       navigate("/minhas-reservas");
     } catch (erro) {
       setErroReserva((erro as Error).message);
@@ -133,11 +179,6 @@ export function DetalhesVoo() {
 
   const { texto: textoStatus, cor: corStatus } = infoStatusVoo(voo.status);
 
-  // Espelha a regra de negócio do backend (Voo.estaIndisponivelParaCompra()):
-  // voos ESGOTADA, ATRASADA, CANCELADA ou REALIZADO não podem receber
-  // novas reservas. Aqui usamos isso para esconder a seleção de
-  // assento e mostrar um aviso claro, em vez de deixar o usuário
-  // escolher um assento e só descobrir o problema ao confirmar.
   const vooIndisponivelParaReserva =
     voo.status === StatusVoo.ESGOTADA ||
     voo.status === StatusVoo.ATRASADA ||
@@ -150,32 +191,24 @@ export function DetalhesVoo() {
     possuiBeneficiosVIP(usuario)
   );
 
-  // Verifica se existe um desconto VIP melhor do que o que o usuário
-  // está recebendo agora, exclusivamente por ele não ter benefícios
-  // VIP - usado só para exibir um incentivo preciso ao upgrade,
-  // evitando mostrar a mensagem quando simplesmente não há nenhum
-  // desconto VIP cadastrado para este tipo de voo.
   const melhorDescontoSeFosseVIP = calcularMelhorDesconto(descontosAtivos, voo.tipoVoo, true);
   const estaPerdendoDescontoVIP =
     !possuiBeneficiosVIP(usuario) &&
     melhorDescontoSeFosseVIP !== null &&
     melhorDescontoSeFosseVIP.id !== melhorDesconto?.id;
 
+  const totalPassageiros = assentosSelecionados.length;
+
   return (
     <Container maxWidth="md" sx={{ mt: 4, mb: 6 }}>
+      {/* Cabeçalho do voo */}
       <Paper sx={{ p: 4, mb: 3 }}>
         <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={2}>
           <Box display="flex" alignItems="center" gap={1.5} flexWrap="wrap">
             <FlightTakeoffIcon color="primary" />
-            <Typography variant="h5" fontWeight={700}>
-              {voo.origem}
-            </Typography>
-            <Typography variant="h5" color="text.secondary">
-              →
-            </Typography>
-            <Typography variant="h5" fontWeight={700}>
-              {voo.destino}
-            </Typography>
+            <Typography variant="h5" fontWeight={700}>{voo.origem}</Typography>
+            <Typography variant="h5" color="text.secondary">→</Typography>
+            <Typography variant="h5" fontWeight={700}>{voo.destino}</Typography>
             <FlightLandIcon color="primary" />
           </Box>
           <Chip label={textoStatus} color={corStatus} />
@@ -191,7 +224,7 @@ export function DetalhesVoo() {
 
         <Box mb={2}>
           <Typography variant="body2" color="text.secondary" mb={0.5}>
-            Preço da passagem
+            Preço por passagem
           </Typography>
           <PrecoComDesconto precoBase={voo.precoBase} desconto={melhorDesconto} tamanho="grande" />
           {estaPerdendoDescontoVIP && (
@@ -206,85 +239,124 @@ export function DetalhesVoo() {
         {vooIndisponivelParaReserva ? (
           <Alert severity={voo.status === StatusVoo.REALIZADO ? "info" : "warning"}>
             {voo.status === StatusVoo.REALIZADO
-              ? "Este voo já foi realizado e não está mais disponível para reserva. Você pode consultar voos antigos em \"Minhas Reservas\"."
+              ? "Este voo já foi realizado e não está mais disponível para reserva."
               : voo.status === StatusVoo.ESGOTADA
                 ? "Este voo está esgotado e não possui mais assentos disponíveis."
                 : "Este voo não está mais disponível para reserva."}
           </Alert>
         ) : (
           <>
-            <Typography variant="h6" fontWeight={700} mb={2}>
-              Selecione seu assento
-            </Typography>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+              <Typography variant="h6" fontWeight={700}>
+                Selecione os assentos
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Até {MAX_ASSENTOS_POR_COMPRA} assentos por compra
+              </Typography>
+            </Box>
 
             <MapaAssentos
               assentos={voo.assentos}
-              assentoSelecionadoId={assentoSelecionado?.id ?? null}
+              assentosSelecionadosIds={assentosSelecionados.map((a) => a.id)}
               usuarioPossuiBeneficiosVIP={possuiBeneficiosVIP(usuario)}
-              onSelecionarAssento={setAssentoSelecionado}
+              onSelecionarAssentos={handleSelecionarAssentos}
             />
 
             {!possuiBeneficiosVIP(usuario) && (
               <Alert severity="info" sx={{ mt: 2 }}>
                 Assentos VIP são exclusivos para contas VIP.{" "}
-                {usuario ? (
-                  <>Faça o upgrade na sua conta para liberar essa opção.</>
-                ) : (
-                  <>Faça login e torne-se VIP para liberar essa opção.</>
-                )}
+                {usuario ? "Faça o upgrade na sua conta para liberar essa opção."
+                  : "Faça login e torne-se VIP para liberar essa opção."}
               </Alert>
             )}
           </>
         )}
       </Paper>
 
-      {!vooIndisponivelParaReserva && assentoSelecionado && (
+      {/* Painel de confirmação — aparece quando há ao menos 1 assento selecionado */}
+      {!vooIndisponivelParaReserva && assentosSelecionados.length > 0 && (
         <Paper sx={{ p: 3 }}>
-          {erroReserva && (
-            <Alert severity="error" sx={{ mb: 2 }}>
-              {erroReserva}
-            </Alert>
-          )}
+          <Typography variant="h6" fontWeight={700} mb={2}>
+            Dados dos passageiros
+          </Typography>
 
-          <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2}>
+          <Table size="small" sx={{ mb: 3 }}>
+            <TableHead>
+              <TableRow>
+                <TableCell>Assento</TableCell>
+                <TableCell>Classe</TableCell>
+                <TableCell>CPF do passageiro</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {assentosSelecionados.map((assento) => (
+                <TableRow key={assento.id}>
+                  <TableCell>
+                    <Typography fontWeight={700}>{assento.numero}</Typography>
+                  </TableCell>
+                  <TableCell>{textoClasseAssento(assento.classe)}</TableCell>
+                  <TableCell>
+                    <TextField
+                      size="small"
+                      placeholder="000.000.000-00"
+                      value={cpfsPorAssento[assento.id] ?? ""}
+                      onChange={(e) => handleCpfChange(assento.id, e.target.value)}
+                      inputProps={{ maxLength: 14 }}
+                      sx={{ width: 160 }}
+                    />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+
+          <Divider sx={{ mb: 2 }} />
+
+          <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2} mb={2}>
             <Box>
               <Typography variant="body2" color="text.secondary">
-                Assento selecionado
-              </Typography>
-              <Typography variant="h6" fontWeight={700}>
-                {assentoSelecionado.numero} ({textoClasseAssento(assentoSelecionado.classe)})
+                {totalPassageiros} passageiro(s)
               </Typography>
             </Box>
-
             <Box textAlign="right">
               <Typography variant="body2" color="text.secondary">
-                Valor da passagem
+                Total estimado
               </Typography>
               <PrecoComDesconto
-                precoBase={voo.precoBase}
-                desconto={melhorDesconto}
+                precoBase={voo.precoBase * totalPassageiros}
+                desconto={melhorDesconto ? { ...melhorDesconto } : null}
                 tamanho="grande"
                 alinhamento="right"
               />
             </Box>
           </Box>
 
+          {erroReserva && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {erroReserva}
+            </Alert>
+          )}
+
           <Button
             variant="contained"
             size="large"
             fullWidth
-            sx={{ mt: 3 }}
-            disabled={criandoReserva}
+            disabled={criandoReserva || !cpfsValidos}
             onClick={handleConfirmarReserva}
           >
             {criandoReserva ? (
               <CircularProgress size={24} color="inherit" />
             ) : usuario ? (
-              "Reservar este assento"
+              `Reservar ${totalPassageiros} passagem(ns)`
             ) : (
               "Entrar para reservar"
             )}
           </Button>
+          {!cpfsValidos && assentosSelecionados.length > 0 && (
+            <Typography variant="caption" color="text.secondary" display="block" textAlign="center" mt={1}>
+              Preencha o CPF de todos os passageiros para continuar.
+            </Typography>
+          )}
         </Paper>
       )}
     </Container>

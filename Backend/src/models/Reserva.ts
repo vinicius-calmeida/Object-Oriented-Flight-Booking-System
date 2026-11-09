@@ -50,6 +50,15 @@ export class Reserva {
   assento!: Assento;
 
   /**
+   * CPF do passageiro que vai usar este assento (pode ser diferente
+   * do usuário comprador, ex: compra para um familiar).
+   * Armazenado apenas como dígitos (11 caracteres), sem formatação.
+   * Opcional para manter compatibilidade com reservas antigas (nullable).
+   */
+  @Column({ type: "varchar", length: 11, nullable: true })
+  cpfPassageiro!: string | null;
+
+  /**
    * Valor final cobrado pela passagem, já com eventuais descontos
    * (automáticos de VIP ou promocionais) aplicados. Calculado pelo
    * ReservaService no momento da criação da reserva.

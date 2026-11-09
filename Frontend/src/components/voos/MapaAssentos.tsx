@@ -1,47 +1,68 @@
 /**
  * MapaAssentos.tsx
  * ----------------
- * Exibe a lista de assentos de um voo em formato de grade visual,
- * permitindo que o usuário selecione um assento disponível.
+ * Exibe a grade visual de assentos permitindo selecionar até 4 assentos
+ * de uma vez (para CPFs diferentes, ex: compra para a família).
  *
  * REGRA DE NEGÓCIO REPLICADA DO BACKEND (ver ReservaService.ts):
- * usuários PADRAO só podem selecionar assentos ECONOMICO. Assentos
- * VIP aparecem visualmente bloqueados (não clicáveis) para esse
- * perfil, com uma indicação de que é necessário upgrade. Isso é uma
- * validação de UX (evita uma tentativa que o backend rejeitaria de
- * qualquer forma) - a validação "de verdade" continua sendo feita no
- * backend (ReservaService), que é a fonte da verdade.
+ * - Usuários PADRAO só podem selecionar assentos ECONOMICO.
+ * - Máximo de 4 assentos por compra (MAX_ASSENTOS_POR_COMPRA).
  *
- * O componente não faz a chamada de API diretamente: apenas notifica
- * o componente pai (DetalhesVoo.tsx) qual assento foi selecionado,
- * via callback "onSelecionarAssento".
+ * O componente não faz chamada de API: notifica o pai (DetalhesVoo.tsx)
+ * com a lista de assentos selecionados via callback onSelecionarAssentos.
  */
 
-import { Box, Typography, Tooltip, Paper } from "@mui/material";
+import { Box, Typography, Tooltip, Paper, Chip } from "@mui/material";
 import EventSeatIcon from "@mui/icons-material/EventSeat";
 import WorkspacePremiumIcon from "@mui/icons-material/WorkspacePremium";
 import type { Assento } from "@/types";
 import { ClasseAssento } from "@/types";
 
+export const MAX_ASSENTOS_POR_COMPRA = 4;
+
 interface MapaAssentosProps {
   assentos: Assento[];
-  assentoSelecionadoId: string | null;
+  assentosSelecionadosIds: string[];
   usuarioPossuiBeneficiosVIP: boolean;
-  onSelecionarAssento: (assento: Assento) => void;
+  onSelecionarAssentos: (assentos: Assento[]) => void;
 }
 
 export function MapaAssentos({
   assentos,
-  assentoSelecionadoId,
+  assentosSelecionadosIds,
   usuarioPossuiBeneficiosVIP,
-  onSelecionarAssento,
+  onSelecionarAssentos,
 }: MapaAssentosProps) {
   const assentosVip = assentos.filter((a) => a.classe === ClasseAssento.VIP);
   const assentosEconomico = assentos.filter((a) => a.classe === ClasseAssento.ECONOMICO);
 
+  function handleToggle(assento: Assento) {
+    const jaSelecionado = assentosSelecionadosIds.includes(assento.id);
+
+    if (jaSelecionado) {
+      // Desseleciona
+      const novos = assentos.filter(
+        (a) => assentosSelecionadosIds.includes(a.id) && a.id !== assento.id
+      );
+      onSelecionarAssentos(novos);
+    } else {
+      if (assentosSelecionadosIds.length >= MAX_ASSENTOS_POR_COMPRA) return;
+      const atuais = assentos.filter((a) => assentosSelecionadosIds.includes(a.id));
+      onSelecionarAssentos([...atuais, assento]);
+    }
+  }
+
   return (
     <Box>
-      <LegendaAssentos />
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5} flexWrap="wrap" gap={1}>
+        <LegendaAssentos />
+        <Chip
+          label={`${assentosSelecionadosIds.length} / ${MAX_ASSENTOS_POR_COMPRA} assento(s) selecionado(s)`}
+          color={assentosSelecionadosIds.length > 0 ? "primary" : "default"}
+          size="small"
+          variant="outlined"
+        />
+      </Box>
 
       {assentosVip.length > 0 && (
         <Box mb={3}>
@@ -51,9 +72,10 @@ export function MapaAssentos({
           </Typography>
           <GradeDeAssentos
             assentos={assentosVip}
-            assentoSelecionadoId={assentoSelecionadoId}
+            assentosSelecionadosIds={assentosSelecionadosIds}
             bloqueados={!usuarioPossuiBeneficiosVIP}
-            onSelecionarAssento={onSelecionarAssento}
+            limiteAtingido={assentosSelecionadosIds.length >= MAX_ASSENTOS_POR_COMPRA}
+            onToggle={handleToggle}
           />
         </Box>
       )}
@@ -65,9 +87,10 @@ export function MapaAssentos({
           </Typography>
           <GradeDeAssentos
             assentos={assentosEconomico}
-            assentoSelecionadoId={assentoSelecionadoId}
+            assentosSelecionadosIds={assentosSelecionadosIds}
             bloqueados={false}
-            onSelecionarAssento={onSelecionarAssento}
+            limiteAtingido={assentosSelecionadosIds.length >= MAX_ASSENTOS_POR_COMPRA}
+            onToggle={handleToggle}
           />
         </Box>
       )}
@@ -75,16 +98,14 @@ export function MapaAssentos({
   );
 }
 
-/** Legenda explicando o significado visual de cada estado de assento. */
 function LegendaAssentos() {
   const itens = [
     { cor: "action.disabled", texto: "Ocupado" },
     { cor: "primary.main", texto: "Disponível" },
     { cor: "secondary.main", texto: "Selecionado" },
   ];
-
   return (
-    <Box display="flex" gap={3} mb={2} flexWrap="wrap">
+    <Box display="flex" gap={3} flexWrap="wrap">
       {itens.map((item) => (
         <Box key={item.texto} display="flex" alignItems="center" gap={0.5}>
           <EventSeatIcon sx={{ color: item.cor, fontSize: 20 }} />
@@ -99,51 +120,57 @@ function LegendaAssentos() {
 
 interface GradeDeAssentosProps {
   assentos: Assento[];
-  assentoSelecionadoId: string | null;
+  assentosSelecionadosIds: string[];
   bloqueados: boolean;
-  onSelecionarAssento: (assento: Assento) => void;
+  limiteAtingido: boolean;
+  onToggle: (assento: Assento) => void;
 }
 
 function GradeDeAssentos({
   assentos,
-  assentoSelecionadoId,
+  assentosSelecionadosIds,
   bloqueados,
-  onSelecionarAssento,
+  limiteAtingido,
+  onToggle,
 }: GradeDeAssentosProps) {
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
       <Box display="flex" flexWrap="wrap" gap={1.5}>
         {assentos.map((assento) => {
-          const selecionado = assento.id === assentoSelecionadoId;
+          const selecionado = assentosSelecionadosIds.includes(assento.id);
           const indisponivel = !assento.disponivel;
-          const bloqueadoPorTipoDeUsuario = bloqueados && assento.disponivel;
-          const clicavel = assento.disponivel && !bloqueadoPorTipoDeUsuario;
+          const bloqueadoPorTipo = bloqueados && assento.disponivel;
+          // Não clicável se: ocupado, bloqueado por tipo, ou limite atingido e não estava selecionado
+          const clicavel =
+            assento.disponivel && !bloqueadoPorTipo && (selecionado || !limiteAtingido);
 
           let corIcone: string;
-          if (indisponivel) corIcone = "action.disabled";
+          if (indisponivel || bloqueadoPorTipo) corIcone = "action.disabled";
           else if (selecionado) corIcone = "secondary.main";
-          else if (bloqueadoPorTipoDeUsuario) corIcone = "action.disabled";
           else corIcone = "primary.main";
 
-          const tituloTooltip = indisponivel
-            ? `Assento ${assento.numero} - já ocupado`
-            : bloqueadoPorTipoDeUsuario
-              ? `Assento ${assento.numero} - exclusivo para usuários VIP`
-              : `Assento ${assento.numero} - disponível`;
+          let tituloTooltip: string;
+          if (indisponivel) tituloTooltip = `Assento ${assento.numero} — já ocupado`;
+          else if (bloqueadoPorTipo) tituloTooltip = `Assento ${assento.numero} — exclusivo para usuários VIP`;
+          else if (limiteAtingido && !selecionado) tituloTooltip = `Limite de ${MAX_ASSENTOS_POR_COMPRA} assentos atingido`;
+          else if (selecionado) tituloTooltip = `Assento ${assento.numero} — clique para desselecionar`;
+          else tituloTooltip = `Assento ${assento.numero} — clique para selecionar`;
 
           return (
             <Tooltip key={assento.id} title={tituloTooltip}>
               <Box
-                onClick={() => clicavel && onSelecionarAssento(assento)}
+                onClick={() => clicavel && onToggle(assento)}
                 display="flex"
                 flexDirection="column"
                 alignItems="center"
                 sx={{
                   cursor: clicavel ? "pointer" : "not-allowed",
-                  opacity: indisponivel || bloqueadoPorTipoDeUsuario ? 0.5 : 1,
+                  opacity: indisponivel || bloqueadoPorTipo || (limiteAtingido && !selecionado) ? 0.4 : 1,
                   p: 0.5,
                   borderRadius: 1,
-                  transition: "background-color 0.15s",
+                  border: selecionado ? "2px solid" : "2px solid transparent",
+                  borderColor: selecionado ? "secondary.main" : "transparent",
+                  transition: "all 0.15s",
                   "&:hover": clicavel ? { backgroundColor: "action.hover" } : undefined,
                 }}
               >

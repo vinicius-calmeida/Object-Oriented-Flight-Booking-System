@@ -13,10 +13,24 @@ export interface DadosCriacaoReserva {
   assentoId: string;
 }
 
+export interface PassageiroDaCompra {
+  assentoId: string;
+  cpf: string;
+}
+
+export interface DadosCriacaoReservaMultipla {
+  vooId: string;
+  passageiros: PassageiroDaCompra[];
+}
+
 export const reservaApi = {
   /** Cria uma nova reserva (status inicial: PENDENTE_PAGAMENTO). */
   criar: (dados: DadosCriacaoReserva): Promise<Reserva> =>
     apiClient.post<Reserva>("/reservas", dados),
+
+  /** Cria múltiplas reservas de uma vez (até 4 passageiros, cada um com seu CPF). */
+  criarMultiplas: (dados: DadosCriacaoReservaMultipla): Promise<Reserva[]> =>
+    apiClient.post<Reserva[]>("/reservas/multiplas", dados),
 
   /** Lista as reservas do usuário autenticado ("Minhas Reservas"). */
   listarMinhas: (): Promise<Reserva[]> =>

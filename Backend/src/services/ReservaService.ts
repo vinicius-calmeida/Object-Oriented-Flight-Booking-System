@@ -32,6 +32,15 @@ import { ClasseAssento } from "../enums/ClasseAssento";
 import { StatusReserva } from "../enums/StatusReserva";
 import { TipoVoo } from "../enums/TipoVoo";
 
+/** Número máximo de assentos por compra (regra de negócio). */
+const MAX_ASSENTOS_POR_COMPRA = 4;
+
+/** Formato de cada passageiro enviado pelo frontend na compra múltipla. */
+export interface PassageiroDaCompra {
+  assentoId: string;
+  cpf: string;
+}
+
 export class ReservaService {
   private reservaRepository: ReservaRepository;
   private vooRepository: VooRepository;
@@ -110,6 +119,93 @@ export class ReservaService {
     reserva.status = StatusReserva.PENDENTE_PAGAMENTO;
 
     return this.reservaRepository.salvar(reserva);
+  }
+
+  /**
+   * Cria múltiplas reservas em uma única compra (até MAX_ASSENTOS_POR_COMPRA).
+   * Cada passageiro tem seu próprio assento e CPF. Todas as reservas são
+   * para o mesmo voo e o mesmo usuário comprador.
+   *
+   * Garante atomicidade parcial: valida TODOS os assentos antes de
+   * marcar qualquer um como ocupado — se algum assento for inválido,
+   * nenhuma reserva é criada.
+   */
+  public async criarReservas(
+    usuario: Usuario,
+    vooId: string,
+    passageiros: PassageiroDaCompra[]
+  ): Promise<Reserva[]> {
+    if (!passageiros || passageiros.length === 0) {
+      throw new Error("Informe ao menos um assento para reservar.");
+    }
+
+    if (passageiros.length > MAX_ASSENTOS_POR_COMPRA) {
+      throw new Error(
+        `É possível reservar no máximo ${MAX_ASSENTOS_POR_COMPRA} assentos por compra.`
+      );
+    }
+
+    // Valida CPFs: aceita com ou sem formatação (###.###.###-##)
+    const cpfRegex = /^\d{11}$/;
+    for (const p of passageiros) {
+      const cpfLimpo = p.cpf.replace(/\D/g, "");
+      if (!cpfRegex.test(cpfLimpo)) {
+        throw new Error(`CPF inválido: "${p.cpf}". Informe 11 dígitos numéricos.`);
+      }
+    }
+
+    // Verifica assentos duplicados na mesma compra
+    const idsAssentos = passageiros.map((p) => p.assentoId);
+    if (new Set(idsAssentos).size !== idsAssentos.length) {
+      throw new Error("Não é possível reservar o mesmo assento duas vezes na mesma compra.");
+    }
+
+    const voo = await this.vooRepository.buscarPorId(vooId);
+    if (!voo) throw new Error("Voo não encontrado.");
+
+    if (voo.estaIndisponivelParaCompra()) {
+      throw new Error(`Não é possível reservar: o voo está com status ${voo.status}.`);
+    }
+
+    if (new Date(voo.dataHora).getTime() <= Date.now()) {
+      throw new Error("Não é possível reservar: este voo já ocorreu.");
+    }
+
+    // --- Fase 1: validar TODOS os assentos antes de alterar qualquer estado ---
+    const assentosParaReservar = passageiros.map((p) => {
+      const assento = voo.assentos.find((a) => a.id === p.assentoId);
+      if (!assento) throw new Error(`Assento não encontrado neste voo.`);
+      if (!assento.disponivel) throw new Error(`O assento ${assento.numero} já está ocupado.`);
+      if (assento.classe === ClasseAssento.VIP && !usuario.possuiBeneficiosVIP()) {
+        throw new Error(
+          `O assento ${assento.numero} é VIP. Usuários padrão não podem reservar assentos VIP.`
+        );
+      }
+      return { assento, cpf: p.cpf.replace(/\D/g, "") };
+    });
+
+    // --- Fase 2: marcar todos os assentos e salvar o voo de uma vez ---
+    for (const { assento } of assentosParaReservar) {
+      assento.reservar();
+    }
+    await this.vooRepository.salvar(voo);
+
+    // --- Fase 3: criar e salvar cada reserva ---
+    const valorFinal = await this.calcularValorFinal(usuario, voo.precoBase, voo.tipoVoo);
+
+    const reservasSalvas: Reserva[] = [];
+    for (const { assento, cpf } of assentosParaReservar) {
+      const reserva = new Reserva();
+      reserva.usuario = usuario;
+      reserva.voo = voo;
+      reserva.assento = assento;
+      reserva.cpfPassageiro = cpf;
+      reserva.valorFinal = valorFinal;
+      reserva.status = StatusReserva.PENDENTE_PAGAMENTO;
+      reservasSalvas.push(await this.reservaRepository.salvar(reserva));
+    }
+
+    return reservasSalvas;
   }
 
   /**
