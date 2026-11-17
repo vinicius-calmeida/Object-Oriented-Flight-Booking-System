@@ -24,6 +24,7 @@ Cada pasta tem seu próprio README com detalhes técnicos. Este README dá a vis
 7. [Como rodar](#-como-rodar-o-projeto)
 8. [Roteiro de teste](#-roteiro-de-teste-completo)
 9. [Decisões e limitações](#-decisões-de-projeto-e-limitações-conhecidas)
+10. [Avaliação](#-avaliação)
 
 ---
 
@@ -241,11 +242,28 @@ Por ser um projeto acadêmico/portfólio:
 - **Pagamento simbólico** — sem integração com gateway real.
 - **Banco local (SQLite)** — arquivo gerado automaticamente, sem servidor separado.
 - **LLM pode errar** — os filtros são exibidos antes dos resultados para o usuário confirmar; a busca comum está sempre disponível como fallback.
+  
+## Avaliação
+
+Criei um conjunto de **20 frases de teste** com os filtros esperados definidos por mim antes da execução. O script chama o modelo real e compara campo a campo.
+
+- **Modelo:** `gemini-3.1-flash-lite` (plano gratuito)
+- **Como rodar:** `[comando e caminho do script]`
+
+| Métrica | Resultado |
+|---|---|
+| Casos com todos os filtros corretos | **16/20 (80%)** |
+| Campos corretos | **38/44 (86%)** |
+
+**Análise das 4 falhas**
+- **2 casos por limite de requisições** do plano gratuito (15/min, erro 429): a API recusou a chamada e o modelo não chegou a interpretar. Não foram reexecutados.
+- **2 casos de pedido por região** ("quero ir para a Europa", "voo para o exterior"): o filtro de destino aceita uma única cidade, então cada pedido virou uma só (Lisboa e Nova Iorque). Contei como erro porque a busca deveria cobrir a região inteira. É uma limitação da funcionalidade atual, planejada como próximo passo.
 
 ### Próximos passos possíveis
 
-- Cache de interpretações repetidas (reduz latência e custo de API)
+- Filtro aceitando mais de uma cidade como destino
 - Conjunto de avaliação com frases de teste e métricas de acerto do LLM
+- Cache de interpretações repetidas (reduz latência e custo de API)
 - Deploy em nuvem (Railway, Render ou similar)
 - Autenticação com JWT
 - Substituição do SQLite por PostgreSQL
